@@ -36,7 +36,6 @@ jobs:
             echo 'format=gif' >> "$GITHUB_OUTPUT"
           else
             echo 'format=missing' >> "$GITHUB_OUTPUT"
-            echo 'Waiting for the selected banner asset.'
           fi
 
       - name: Decode and verify transfer
@@ -44,13 +43,23 @@ jobs:
         shell: bash
         run: |
           python3 - <<'PY'
-          import base64, hashlib
+          import base64, hashlib, re
           from pathlib import Path
           lines = Path('assets/profile-banner.webm.b64').read_text().splitlines()
           expected = lines[0].removeprefix('# sha256:').strip()
-          data = base64.b64decode(''.join(lines[1:]), validate=True)
+          encoded = ''.join(lines[1:])
+          data = base64.b64decode(encoded, validate=True)
           if hashlib.sha256(data).hexdigest() != expected:
-              raise SystemExit('Banner transfer checksum mismatch')
+              # Restore the two known zero-filled container padding runs.
+              # The original full-file checksum must still match afterward.
+              if len(re.findall(r'A{20,}', encoded)) == 2:
+                  counts = iter((119, 624))
+                  encoded = re.sub(r'A{20,}', lambda _: 'A' * next(counts), encoded)
+                  data = base64.b64decode(encoded, validate=True)
+          actual = hashlib.sha256(data).hexdigest()
+          if actual != expected:
+              raise SystemExit(f'Banner transfer checksum mismatch: {actual}; {len(data)} bytes')
+          print(f'Verified original transport checksum: {actual}; {len(data)} bytes')
           Path('/tmp/profile-banner.webm').write_bytes(data)
           PY
           if ! command -v ffmpeg >/dev/null; then
@@ -60,6 +69,17 @@ jobs:
           ffmpeg -hide_banner -loglevel error -y -i /tmp/profile-banner.webm \
             -filter_complex '[0:v]split[a][b];[a]palettegen[p];[b][p]paletteuse' \
             -loop 0 assets/profile-banner.gif
+          ffprobe -v error -count_frames -select_streams v:0 \
+            -show_entries stream=width,height,nb_read_frames -of json \
+            assets/profile-banner.gif > /tmp/banner-check.json
+          python3 - <<'PY'
+          import json
+          from pathlib import Path
+          info = json.loads(Path('/tmp/banner-check.json').read_text())['streams'][0]
+          assert (info['width'], info['height'], int(info['nb_read_frames'])) == (587, 328, 8), info
+          assert b'NETSCAPE2.0' in Path('assets/profile-banner.gif').read_bytes()
+          print('Verified looping animated GIF:', info)
+          PY
 
       - name: Enable selected banner in README
         if: steps.source.outputs.format != 'missing'
