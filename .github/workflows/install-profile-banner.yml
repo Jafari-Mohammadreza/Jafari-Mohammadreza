@@ -1,0 +1,95 @@
+name: Install animated profile banner
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [main]
+    paths:
+      - assets/profile-banner.gif
+      - assets/profile-banner.webm.b64
+      - .github/workflows/install-profile-banner.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: profile-banner-install
+  cancel-in-progress: false
+
+jobs:
+  install:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Check out profile
+        uses: actions/checkout@d23441a48e516b6c34aea4fa41551a30e30af803 # v6
+        with:
+          ref: main
+
+      - name: Check source
+        id: source
+        shell: bash
+        run: |
+          if [[ -f assets/profile-banner.webm.b64 ]]; then
+            echo 'format=webm' >> "$GITHUB_OUTPUT"
+          elif [[ -f assets/profile-banner.gif ]]; then
+            echo 'format=gif' >> "$GITHUB_OUTPUT"
+          else
+            echo 'format=missing' >> "$GITHUB_OUTPUT"
+            echo 'Waiting for the selected banner asset.'
+          fi
+
+      - name: Decode and verify transfer
+        if: steps.source.outputs.format == 'webm'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          import base64, hashlib
+          from pathlib import Path
+          lines = Path('assets/profile-banner.webm.b64').read_text().splitlines()
+          expected = lines[0].removeprefix('# sha256:').strip()
+          data = base64.b64decode(''.join(lines[1:]), validate=True)
+          if hashlib.sha256(data).hexdigest() != expected:
+              raise SystemExit('Banner transfer checksum mismatch')
+          Path('/tmp/profile-banner.webm').write_bytes(data)
+          PY
+          if ! command -v ffmpeg >/dev/null; then
+            sudo apt-get update -qq
+            sudo apt-get install -y ffmpeg
+          fi
+          ffmpeg -hide_banner -loglevel error -y -i /tmp/profile-banner.webm \
+            -filter_complex '[0:v]split[a][b];[a]palettegen[p];[b][p]paletteuse' \
+            -loop 0 assets/profile-banner.gif
+
+      - name: Enable selected banner in README
+        if: steps.source.outputs.format != 'missing'
+        shell: bash
+        run: |
+          python3 - <<'PY'
+          from pathlib import Path
+          image = Path('assets/profile-banner.gif').read_bytes()
+          if image[:6] not in (b'GIF87a', b'GIF89a'):
+              raise SystemExit('Invalid GIF asset')
+          readme = Path('README.md')
+          text = readme.read_text()
+          start = '<!-- PROFILE-BANNER:START -->'
+          end = '<!-- PROFILE-BANNER:END -->'
+          if start not in text or end not in text:
+              raise SystemExit('README banner markers are missing; no changes made')
+          banner = '''<p align="center">
+            <img src="./assets/profile-banner.gif" alt="Animated black and neon-green DevOps, Network and Security banner with servers, networking, a terminal and Pac-Man. Decorative animation; not live contribution data." width="100%" />
+          </p>'''
+          before, rest = text.split(start, 1)
+          _, after = rest.split(end, 1)
+          readme.write_text(before + start + '\n' + banner + '\n' + end + after)
+          PY
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git add README.md assets/profile-banner.gif
+          if [[ -f assets/profile-banner.webm.b64 ]]; then
+            git rm assets/profile-banner.webm.b64
+          fi
+          if ! git diff --cached --quiet; then
+            git commit -m 'Publish selected animated DevOps profile banner'
+            git push origin HEAD:main
+          fi
