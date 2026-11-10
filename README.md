@@ -1,5 +1,7 @@
 <!-- PROFILE-BANNER:START -->
-<!-- The selected GIF banner will appear here after assets/profile-banner.gif is uploaded. -->
+<p align="center">
+  <img src="./assets/profile-banner.gif" alt="Animated black and neon-green DevOps, Network and Security banner with servers, networking, a terminal and Pac-Man. Decorative animation; not live contribution data." width="100%" />
+</p>
 <!-- PROFILE-BANNER:END -->
 
 <h1 align="center">Mohammadreza Jafari</h1>
